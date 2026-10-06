@@ -6,7 +6,7 @@
 
 ## Быстрый запуск
 
-Готовые сборки для Windows, macOS и Linux находятся в [Releases](https://github.com/Ikalike112/bitbucket-pr-manager/releases) приватного репозитория. Скачай архив для своей ОС и запусти приложение. Сборки создаёт [GitHub Actions](.github/workflows/build-desktop.yml) из исходников этого репозитория. Они не подписаны сертификатом разработчика: на macOS может потребоваться открыть приложение через контекстное меню **Open**; глобально отключать Gatekeeper не нужно. Если сборок ещё нет или архитектура Mac не подходит, используй запуск из исходников ниже.
+Готовые сборки для Windows, Linux, macOS Apple Silicon (`arm64`) и macOS Intel находятся в [Releases](https://github.com/Ikalike112/bitbucket-pr-manager/releases) приватного репозитория. Скачай архив для своей ОС и запусти приложение. Сборки создаёт [GitHub Actions](.github/workflows/build-desktop.yml) из исходников этого репозитория. Они не подписаны сертификатом разработчика: на macOS может потребоваться открыть приложение через контекстное меню **Open**; глобально отключать Gatekeeper не нужно. Если сборок ещё нет, используй запуск из исходников ниже.
 
 Для запуска из исходников нужны Python 3.10+ и Tkinter. Python-пакеты через `pip` для приложения не требуются.
 
@@ -56,4 +56,4 @@ CLI с тем же Bitbucket API-кодом: `python app/bitbucket_pr_batch.py -
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `v0.1.0` запускает сборки для трёх ОС и добавляет архивы в приватный GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.
+Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `v0.1.1` запускает четыре сборки и добавляет архивы в приватный GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.

@@ -11,12 +11,20 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.archive }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            archive: windows
+          - os: macos-latest
+            archive: macos-arm64
+          - os: macos-15-intel
+            archive: macos-intel
+          - os: ubuntu-latest
+            archive: linux
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,13 +49,13 @@ jobs:
         run: Compress-Archive -Path dist/BitbucketPRManager.exe -DestinationPath bitbucket-pr-manager-windows.zip
       - name: Package macOS app
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/BitbucketPRManager.app bitbucket-pr-manager-macos.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/BitbucketPRManager.app bitbucket-pr-manager-${{ matrix.archive }}.zip
       - name: Package Linux executable
         if: runner.os == 'Linux'
         run: tar -czf bitbucket-pr-manager-linux.tar.gz -C dist BitbucketPRManager
       - uses: actions/upload-artifact@v4
         with:
-          name: bitbucket-pr-manager-${{ runner.os }}
+          name: bitbucket-pr-manager-${{ matrix.archive }}
           path: |
             bitbucket-pr-manager-*.zip
             bitbucket-pr-manager-*.tar.gz
