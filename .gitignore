@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec
+*.log
+.env
+.env.*
+*.token
+*.secret
+pr-links*.txt
+!pr-links.example.txt
+.DS_Store
+Thumbs.db
