@@ -6,7 +6,7 @@
 
 ## Быстрый запуск
 
-Готовые сборки для Windows, Linux, macOS Apple Silicon (`arm64`) и macOS Intel находятся в [Releases](https://github.com/Ikalike112/bitbucket-pr-manager/releases) приватного репозитория. Скачай архив для своей ОС и запусти приложение. Сборки создаёт [GitHub Actions](.github/workflows/build-desktop.yml) из исходников этого репозитория. Они не подписаны сертификатом разработчика: на macOS может потребоваться открыть приложение через контекстное меню **Open**; глобально отключать Gatekeeper не нужно. Если сборок ещё нет, используй запуск из исходников ниже.
+Готовые сборки для Windows, Linux, macOS Apple Silicon (`arm64`) и macOS Intel находятся в [Releases](https://github.com/Ikalike112/bitbucket-pr-manager/releases). Скачай архив для своей ОС и запусти приложение. Сборки создаёт [GitHub Actions](.github/workflows/build-desktop.yml) из исходников этого репозитория. Они не подписаны сертификатом разработчика: на macOS может потребоваться открыть приложение через контекстное меню **Open**; глобально отключать Gatekeeper не нужно. Если сборок ещё нет, используй запуск из исходников ниже.
 
 Для запуска из исходников нужны Python 3.10+ и Tkinter. Python-пакеты через `pip` для приложения не требуются.
 
@@ -35,7 +35,7 @@ sudo pacman -S python tk
 
 Создай [Bitbucket Cloud API token](https://support.atlassian.com/bitbucket-cloud/docs/create-an-api-token/) для аккаунта с доступом к нужным репозиториям. Токену требуются права определить пользователя, читать PR и выполнять approve/merge. Вставь его в скрытое поле **API token** и нажми **Проверить доступ**. Можно также задать переменную окружения `BITBUCKET_API_TOKEN` до запуска.
 
-Токен не сохраняется в файл и не попадает в журнал приложения. Ссылки и действия также не сохраняются. Не добавляй токен в исходники, командную строку, PR-файлы или Git. Собственное одобрение автора PR может не удовлетворить правилу обязательного ревьюера; приложение не обходит merge checks Bitbucket.
+Токен не сохраняется в файл и не попадает в журнал приложения. Ссылки и действия также не сохраняются. Не добавляй токен в исходники, командную строку, PR-файлы или Git. Выдавай токену только необходимые права и запускай сборки из Releases этого репозитория либо собирай приложение из исходников. Собственное одобрение автора PR может не удовлетворить правилу обязательного ревьюера; приложение не обходит merge checks Bitbucket.
 
 ## Как пользоваться
 
@@ -56,4 +56,4 @@ CLI с тем же Bitbucket API-кодом: `python app/bitbucket_pr_batch.py -
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `vX.Y.Z` запускает четыре сборки и добавляет архивы в приватный GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.
+Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `vX.Y.Z` запускает четыре сборки и добавляет архивы в GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.
