@@ -122,7 +122,8 @@ def approved_by(pr, user_uuid):
     )
 
 
-def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False, target=None):
+def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False,
+               target=None, include_approval_state=False):
     if not approve and not merge:
         raise BitbucketError("select approve, merge, or both")
     pr = api.call("GET", ref.api_path)
@@ -132,7 +133,8 @@ def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False,
     if target and destination != target:
         raise BitbucketError(f"target is {destination!r}, expected {target!r}")
     if state == "MERGED":
-        return "already merged"
+        result = "already merged"
+        return (result, False) if dry_run and include_approval_state else result
     if state != "OPEN":
         raise BitbucketError(f"PR state is {state!r}, expected OPEN")
 
@@ -141,7 +143,8 @@ def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False,
         action = ("already approved" if already_approved else "approve") if approve else ""
         if merge:
             action += ", then merge" if action else "merge"
-        return f"PLAN {action} into {destination} ({source_hash[:12] if source_hash else 'unknown SHA'})"
+        plan = f"PLAN {action} into {destination} ({source_hash[:12] if source_hash else 'unknown SHA'})"
+        return (plan, already_approved) if include_approval_state else plan
 
     if approve and not already_approved:
         api.call("POST", ref.api_path + "/approve")

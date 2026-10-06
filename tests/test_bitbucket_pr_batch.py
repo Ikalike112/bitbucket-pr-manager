@@ -72,6 +72,26 @@ class PullRequestBatchTests(unittest.TestCase):
         self.assertIn("PLAN approve, then merge", process_pr(api, self.ref, "user-1", merge=True, dry_run=True))
         self.assertEqual(len(api.calls), 1)
 
+    def test_preview_reports_existing_approval_without_changing_pr(self):
+        api = FakeAPI()
+        api.pr["participants"] = [{"user": {"uuid": "user-1"}, "approved": True}]
+        plan, already_approved = process_pr(
+            api, self.ref, "user-1", merge=True, dry_run=True,
+            include_approval_state=True,
+        )
+        self.assertTrue(already_approved)
+        self.assertIn("already approved, then merge", plan)
+        self.assertEqual([call[0] for call in api.calls], ["GET"])
+
+    def test_preview_of_merged_pr_does_not_report_approval(self):
+        api = FakeAPI()
+        api.pr["state"] = "MERGED"
+        self.assertEqual(
+            process_pr(api, self.ref, "user-1", merge=True, dry_run=True,
+                       include_approval_state=True),
+            ("already merged", False),
+        )
+
     def test_target_mismatch_prevents_mutation(self):
         api = FakeAPI()
         with self.assertRaises(BitbucketError):

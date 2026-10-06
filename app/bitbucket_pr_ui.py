@@ -26,6 +26,16 @@ COLORS = {
 }
 
 
+def action_label(approve, merge, all_approved=False):
+    if approve and merge:
+        return "Merge" if all_approved else "Approve and merge"
+    if merge:
+        return "Merge"
+    if approve:
+        return "Approve"
+    return "Выбери действие"
+
+
 def system_font(root):
     families = set(tkfont.families(root))
     if sys.platform == "darwin":
@@ -238,6 +248,7 @@ class PullRequestApp:
         self.busy = False
         self._has_output = False
         self._token_visible = False
+        self._preview_all_approved = False
         self.font_name = system_font(root)
         self.font = (self.font_name, 11)
         self.font_small = (self.font_name, 10)
@@ -349,14 +360,16 @@ class PullRequestApp:
                  highlightcolor=COLORS["accent"], bd=0).pack(side="left", ipady=7, padx=(0, 18))
         TickBox(options, "Approve", self.approve, self.font).pack(side="left", padx=(0, 14))
         TickBox(options, "Merge", self.merge, self.font).pack(side="left")
-        self.run_button = RoundedButton(options, "Одобрить PR", self.run,
+        self.run_button = RoundedButton(options, "Approve", self.run,
                                         self.font, kind="accent")
         self.run_button.pack(side="right")
         self.preview_button = RoundedButton(options, "Предпросмотр",
                                             self.preview, self.font_small)
         self.preview_button.pack(side="right", padx=(0, 10))
-        self.approve.trace_add("write", self.update_run_label)
-        self.merge.trace_add("write", self.update_run_label)
+        self.approve.trace_add("write", self.invalidate_preview)
+        self.merge.trace_add("write", self.invalidate_preview)
+        self.token.trace_add("write", self.invalidate_preview)
+        self.target.trace_add("write", self.invalidate_preview)
 
         results = self.card(shell, 4)
         results.columnconfigure(0, weight=1)
@@ -441,21 +454,20 @@ class PullRequestApp:
 
     def update_link_count(self, _event=None):
         if self.links.edit_modified():
+            self.invalidate_preview()
             lines = [line.strip() for line in self.links.get("1.0", "end").splitlines()]
             count = len({line for line in lines if line and not line.startswith("#")})
             self.link_count.set(f"{count} PR")
             self.links.edit_modified(False)
 
-    def update_run_label(self, *_):
-        if self.approve.get() and self.merge.get():
-            label = "Одобрить и слить"
-        elif self.merge.get():
-            label = "Слить PR"
-        elif self.approve.get():
-            label = "Одобрить PR"
-        else:
-            label = "Выбери действие"
-        self.run_button.set_label(label)
+    def invalidate_preview(self, *_):
+        self._preview_all_approved = False
+        self.update_run_label()
+
+    def update_run_label(self):
+        self.run_button.set_label(action_label(
+            self.approve.get(), self.merge.get(), self._preview_all_approved,
+        ))
 
     def clear_output(self):
         self.output.configure(state="normal")
@@ -561,32 +573,46 @@ class PullRequestApp:
             return
 
         target = self.target.get().strip() or None
+        preview_context = (
+            token, target, approve, merge, self.links.get("1.0", "end"),
+        )
         action = "Проверка" if dry_run else "Выполнение"
         self.log(f"{action}: {len(refs)} PR; approve={approve}, merge={merge}, target={target or 'any'}")
         self.set_busy(True)
         threading.Thread(
             target=self.batch_worker,
-            args=(token, refs, approve, merge, dry_run, target),
+            args=(token, refs, approve, merge, dry_run, target, preview_context),
             daemon=True,
         ).start()
 
-    def batch_worker(self, token, refs, approve, merge, dry_run, target):
+    def batch_worker(self, token, refs, approve, merge, dry_run, target, preview_context):
         api = BitbucketAPI(token)
         try:
             me = api.call("GET", "/user")
             user_uuid = me["uuid"]
             failures = 0
+            all_approved = True
             for ref in refs:
                 try:
                     result = process_pr(
                         api, ref, user_uuid,
                         approve=approve, merge=merge, dry_run=dry_run, target=target,
+                        include_approval_state=dry_run and approve and merge,
                     )
+                    if dry_run and approve and merge:
+                        result, already_approved = result
+                        all_approved = all_approved and already_approved
                     self.events.put(("log", f"OK   {ref.url} -> {result}"))
                 except (BitbucketError, KeyError, ValueError, OSError) as error:
                     failures += 1
                     self.events.put(("log", f"FAIL {ref.url} -> {error}"))
             self.events.put(("log", f"Готово: {len(refs)} PR, ошибок: {failures}."))
+            if dry_run and approve and merge:
+                self.events.put(("approval_preview", (
+                    preview_context, failures == 0 and all_approved,
+                )))
+            elif not dry_run:
+                self.events.put(("clear_preview", None))
         except (BitbucketError, KeyError, ValueError, OSError) as error:
             self.events.put(("log", f"Операция прервана: {error}"))
         finally:
@@ -598,6 +624,17 @@ class PullRequestApp:
                 kind, value = self.events.get_nowait()
                 if kind == "log":
                     self.log(value)
+                elif kind == "approval_preview":
+                    context, all_approved = value
+                    current = (
+                        self.token.get().strip(), self.target.get().strip() or None,
+                        self.approve.get(), self.merge.get(), self.links.get("1.0", "end"),
+                    )
+                    if context == current:
+                        self._preview_all_approved = all_approved
+                        self.update_run_label()
+                elif kind == "clear_preview":
+                    self.invalidate_preview()
                 elif kind == "done":
                     self.set_busy(False)
         except queue.Empty:
