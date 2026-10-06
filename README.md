@@ -56,4 +56,4 @@ CLI с тем же Bitbucket API-кодом: `python app/bitbucket_pr_batch.py -
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `v0.1.1` запускает четыре сборки и добавляет архивы в приватный GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.
+Сборки исполняемых файлов запускаются вручную в **Actions → Build desktop apps → Run workflow**. Тег вида `vX.Y.Z` запускает четыре сборки и добавляет архивы в приватный GitHub Release. Для локальной сборки требуется только `python -m pip install -r requirements-build.txt`, затем `python -m PyInstaller --onefile --windowed --name BitbucketPRManager app/bitbucket_pr_ui.py`.

@@ -37,6 +37,196 @@ def system_font(root):
     return next((name for name in preferred if name in families), "TkDefaultFont")
 
 
+def rounded_rect(canvas, x0, y0, x1, y1, radius, color, tag="shape"):
+    """Draw a filled rounded rectangle using Tk primitives on every platform."""
+    if x1 <= x0 or y1 <= y0:
+        return
+    radius = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
+    corners = (
+        (x0, y0, 90),
+        (x1 - 2 * radius, y0, 0),
+        (x1 - 2 * radius, y1 - 2 * radius, 270),
+        (x0, y1 - 2 * radius, 180),
+    )
+    for left, top, start in corners:
+        canvas.create_arc(left, top, left + 2 * radius, top + 2 * radius,
+                          start=start, extent=90, style="pieslice",
+                          fill=color, outline=color, tags=tag)
+    canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1,
+                            fill=color, outline=color, tags=tag)
+    canvas.create_rectangle(x0, y0 + radius, x1, y1 - radius,
+                            fill=color, outline=color, tags=tag)
+
+
+class RoundedButton(tk.Canvas):
+    def __init__(self, parent, text, command, font, kind="secondary"):
+        self.label = text
+        self.command = command
+        self.kind = kind
+        self.enabled = True
+        self.hovered = False
+        self.text_font = tkfont.Font(font=font)
+        self.pad_x = 16 if kind != "ghost" else 9
+        self.button_height = 42 if kind == "accent" else 38
+        super().__init__(parent, height=self.button_height, bg=COLORS["surface"],
+                         highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
+        self.set_label(text)
+        self.bind("<Configure>", lambda _event: self.draw())
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        self.bind("<Button-1>", self.on_click)
+        self.bind("<Return>", self.on_click)
+        self.bind("<space>", self.on_click)
+
+    def set_label(self, text):
+        self.label = text
+        self.configure(width=self.text_font.measure(text) + 2 * self.pad_x)
+        self.draw()
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        self.configure(cursor="hand2" if enabled else "arrow")
+        self.draw()
+
+    def on_enter(self, _event):
+        self.hovered = True
+        self.draw()
+
+    def on_leave(self, _event):
+        self.hovered = False
+        self.draw()
+
+    def on_click(self, _event):
+        if self.enabled:
+            self.focus_set()
+            self.command()
+
+    def draw(self):
+        self.delete("all")
+        if self.kind == "accent":
+            fill = COLORS["accent_hover"] if self.hovered else COLORS["accent"]
+            foreground = "#FFFFFF"
+        elif self.kind == "ghost":
+            fill = "#F1F5FB" if self.hovered else COLORS["surface"]
+            foreground = COLORS["accent"] if self.hovered else COLORS["muted"]
+        else:
+            fill = "#DCE9FF" if self.hovered else COLORS["accent_soft"]
+            foreground = COLORS["accent"]
+        if not self.enabled:
+            fill, foreground = "#EEF1F6", "#9AA7B8"
+        width = int(self.cget("width"))
+        height = int(self.cget("height"))
+        rounded_rect(self, 1, 1, width - 1, height - 1, 9, fill)
+        self.create_text(width / 2, height / 2, text=self.label,
+                         fill=foreground, font=self.text_font)
+
+
+class TickBox(tk.Frame):
+    def __init__(self, parent, text, variable, font):
+        super().__init__(parent, bg=COLORS["surface"], takefocus=1, cursor="hand2")
+        self.variable = variable
+        self.icon = tk.Canvas(self, width=20, height=20, bg=COLORS["surface"],
+                              highlightthickness=0, bd=0, cursor="hand2")
+        self.icon.pack(side="left", padx=(0, 7))
+        self.text = tk.Label(self, text=text, bg=COLORS["surface"],
+                             fg=COLORS["text"], font=font, cursor="hand2")
+        self.text.pack(side="left")
+        for widget in (self, self.icon, self.text):
+            widget.bind("<Button-1>", self.toggle)
+        self.bind("<Return>", self.toggle)
+        self.bind("<space>", self.toggle)
+        variable.trace_add("write", lambda *_: self.draw())
+        self.draw()
+
+    def toggle(self, _event):
+        self.focus_set()
+        self.variable.set(not self.variable.get())
+
+    def draw(self):
+        self.icon.delete("all")
+        selected = self.variable.get()
+        rounded_rect(self.icon, 1, 1, 19, 19, 5,
+                     COLORS["accent"] if selected else COLORS["border"])
+        if selected:
+            rounded_rect(self.icon, 2, 2, 18, 18, 4, COLORS["accent"])
+            self.icon.create_line(5, 10, 9, 14, 16, 6, fill="white",
+                                  width=2.2, capstyle="round", joinstyle="round")
+        else:
+            rounded_rect(self.icon, 2, 2, 18, 18, 4, COLORS["surface"])
+
+
+class PillScrollbar(tk.Canvas):
+    def __init__(self, parent, command):
+        super().__init__(parent, width=14, height=1, bg=COLORS["field"],
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.command = command
+        self.first = 0.0
+        self.last = 1.0
+        self.hovered = False
+        self.drag_offset = 0.0
+        self.thumb_top = 0.0
+        self.thumb_height = 0.0
+        self.bind("<Configure>", lambda _event: self.draw())
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        self.bind("<Button-1>", self.on_press)
+        self.bind("<B1-Motion>", self.on_drag)
+        self.bind("<MouseWheel>", self.on_wheel)
+        self.bind("<Button-4>", lambda _event: self.command("scroll", -1, "units"))
+        self.bind("<Button-5>", lambda _event: self.command("scroll", 1, "units"))
+
+    def set(self, first, last):
+        self.first = max(0.0, min(1.0, float(first)))
+        self.last = max(self.first, min(1.0, float(last)))
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        height = self.winfo_height()
+        if height <= 2:
+            return
+        rounded_rect(self, 5, 7, 9, height - 7, 2, "#E6ECF4")
+        visible = self.last - self.first
+        if visible >= 0.999:
+            return
+        span = max(1.0, height - 14)
+        self.thumb_height = min(span, max(30.0, span * visible))
+        available = max(0.0, span - self.thumb_height)
+        self.thumb_top = 7 + available * self.first / max(0.001, 1 - visible)
+        color = COLORS["accent"] if self.hovered else "#AAB8CC"
+        rounded_rect(self, 3, self.thumb_top, 11,
+                     self.thumb_top + self.thumb_height, 4, color)
+
+    def on_enter(self, _event):
+        self.hovered = True
+        self.draw()
+
+    def on_leave(self, _event):
+        self.hovered = False
+        self.draw()
+
+    def on_press(self, event):
+        if self.last - self.first >= 0.999:
+            return
+        if self.thumb_top <= event.y <= self.thumb_top + self.thumb_height:
+            self.drag_offset = event.y - self.thumb_top
+        else:
+            self.drag_offset = self.thumb_height / 2
+            self.on_drag(event)
+
+    def on_drag(self, event):
+        visible = self.last - self.first
+        if visible >= 0.999:
+            return
+        available = max(1.0, self.winfo_height() - 14 - self.thumb_height)
+        offset = max(0.0, min(available, event.y - self.drag_offset - 7))
+        self.command("moveto", offset / available * (1 - visible))
+
+    def on_wheel(self, event):
+        direction = -1 if event.delta > 0 else 1
+        self.command("scroll", direction, "units")
+
+
 class PullRequestApp:
     def __init__(self, root):
         self.root = root
@@ -77,7 +267,7 @@ class PullRequestApp:
         header.columnconfigure(1, weight=1)
         logo = tk.Canvas(header, width=48, height=48, bg=COLORS["background"], highlightthickness=0)
         logo.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 14))
-        logo.create_rectangle(0, 0, 48, 48, fill=COLORS["accent"], outline=COLORS["accent"])
+        rounded_rect(logo, 0, 0, 48, 48, 10, COLORS["accent"])
         logo.create_text(24, 24, text="B", fill="white", font=(self.font_name, 24, "bold"))
         tk.Label(header, text="Pull request manager", bg=COLORS["background"],
                  fg=COLORS["text"], font=self.font_title).grid(row=0, column=1, sticky="w")
@@ -101,14 +291,14 @@ class PullRequestApp:
             highlightcolor=COLORS["accent"], bd=0,
         )
         self.token_entry.grid(row=0, column=0, sticky="ew", ipady=9)
-        self.show_button = ttk.Button(credential_row, text="Показать", style="Ghost.TButton",
-                                      command=self.toggle_token)
+        self.show_button = RoundedButton(credential_row, "Показать", self.toggle_token,
+                                         self.font_small, kind="ghost")
         self.show_button.grid(row=0, column=1, padx=(8, 0))
-        self.test_button = ttk.Button(credential_row, text="Проверить доступ",
-                                      style="Secondary.TButton", command=self.check_connection)
+        self.test_button = RoundedButton(credential_row, "Проверить доступ",
+                                         self.check_connection, self.font_small)
         self.test_button.grid(row=0, column=2, padx=(8, 0))
-        ttk.Button(credential_row, text="Настройка", style="Ghost.TButton",
-                   command=self.show_guide).grid(row=0, column=3, padx=(8, 0))
+        RoundedButton(credential_row, "Настройка", self.show_guide,
+                      self.font_small, kind="ghost").grid(row=0, column=3, padx=(8, 0))
         tk.Label(account, text="Вставь API token или используй BITBUCKET_API_TOKEN. Репозитории определяются по ссылкам.",
                  bg=COLORS["surface"], fg=COLORS["muted"],
                  font=self.font_small).grid(row=2, column=0, sticky="w", pady=(8, 0))
@@ -127,8 +317,8 @@ class PullRequestApp:
         tk.Label(links_top, textvariable=self.link_count, bg=COLORS["accent_soft"],
                  fg=COLORS["accent"], font=(self.font_name, 9, "bold"),
                  padx=10, pady=6).grid(row=0, column=1, rowspan=2, padx=(10, 10))
-        self.load_button = ttk.Button(links_top, text="Загрузить .txt",
-                                      style="Secondary.TButton", command=self.load_file)
+        self.load_button = RoundedButton(links_top, "Загрузить .txt",
+                                         self.load_file, self.font_small)
         self.load_button.grid(row=0, column=2, rowspan=2)
         text_container = tk.Frame(links_card, bg=COLORS["border"], padx=1, pady=1)
         text_container.grid(row=1, column=0, sticky="nsew")
@@ -140,7 +330,7 @@ class PullRequestApp:
             selectbackground=COLORS["accent_soft"], relief="flat", bd=0, padx=14, pady=12,
         )
         self.links.grid(row=0, column=0, sticky="nsew")
-        links_scroll = ttk.Scrollbar(text_container, orient="vertical", command=self.links.yview)
+        links_scroll = PillScrollbar(text_container, command=self.links.yview)
         links_scroll.grid(row=0, column=1, sticky="ns")
         self.links.configure(yscrollcommand=links_scroll.set)
         self.links.bind("<<Modified>>", self.update_link_count)
@@ -157,15 +347,13 @@ class PullRequestApp:
                  bg=COLORS["field"], fg=COLORS["text"], relief="flat",
                  highlightthickness=1, highlightbackground=COLORS["border"],
                  highlightcolor=COLORS["accent"], bd=0).pack(side="left", ipady=7, padx=(0, 18))
-        ttk.Checkbutton(options, text="Approve", variable=self.approve,
-                        style="Card.TCheckbutton").pack(side="left", padx=(0, 14))
-        ttk.Checkbutton(options, text="Merge", variable=self.merge,
-                        style="Card.TCheckbutton").pack(side="left")
-        self.run_button = ttk.Button(options, text="Одобрить PR",
-                                     style="Accent.TButton", command=self.run)
+        TickBox(options, "Approve", self.approve, self.font).pack(side="left", padx=(0, 14))
+        TickBox(options, "Merge", self.merge, self.font).pack(side="left")
+        self.run_button = RoundedButton(options, "Одобрить PR", self.run,
+                                        self.font, kind="accent")
         self.run_button.pack(side="right")
-        self.preview_button = ttk.Button(options, text="Предпросмотр",
-                                         style="Secondary.TButton", command=self.preview)
+        self.preview_button = RoundedButton(options, "Предпросмотр",
+                                            self.preview, self.font_small)
         self.preview_button.pack(side="right", padx=(0, 10))
         self.approve.trace_add("write", self.update_run_label)
         self.merge.trace_add("write", self.update_run_label)
@@ -178,8 +366,8 @@ class PullRequestApp:
         results_top.columnconfigure(0, weight=1)
         tk.Label(results_top, text="Результаты", bg=COLORS["surface"],
                  fg=COLORS["text"], font=self.font_section).grid(row=0, column=0, sticky="w")
-        ttk.Button(results_top, text="Очистить", style="Ghost.TButton",
-                   command=self.clear_output).grid(row=0, column=1)
+        RoundedButton(results_top, "Очистить", self.clear_output,
+                      self.font_small, kind="ghost").grid(row=0, column=1)
         output_container = tk.Frame(results, bg=COLORS["border"], padx=1, pady=1)
         output_container.grid(row=1, column=0, sticky="nsew")
         output_container.columnconfigure(0, weight=1)
@@ -190,7 +378,7 @@ class PullRequestApp:
             padx=14, pady=12,
         )
         self.output.grid(row=0, column=0, sticky="nsew")
-        output_scroll = ttk.Scrollbar(output_container, orient="vertical", command=self.output.yview)
+        output_scroll = PillScrollbar(output_container, command=self.output.yview)
         output_scroll.grid(row=0, column=1, sticky="ns")
         self.output.configure(yscrollcommand=output_scroll.set)
         for tag, color in (("ok", COLORS["success"]), ("fail", COLORS["danger"]),
@@ -215,30 +403,28 @@ class PullRequestApp:
     def configure_styles(self):
         style = ttk.Style(self.root)
         style.theme_use("clam")
-        style.configure("Accent.TButton", background=COLORS["accent"], foreground="white",
-                        borderwidth=0, relief="flat", padding=(16, 10), font=self.font)
-        style.map("Accent.TButton", background=[("disabled", COLORS["border"]),
-                                                  ("active", COLORS["accent_hover"])],
-                  foreground=[("disabled", COLORS["muted"])])
-        style.configure("Secondary.TButton", background=COLORS["accent_soft"],
-                        foreground=COLORS["accent"], borderwidth=0, relief="flat",
-                        padding=(14, 10), font=self.font_small)
-        style.map("Secondary.TButton", background=[("active", "#DCE9FF")])
-        style.configure("Ghost.TButton", background=COLORS["surface"],
-                        foreground=COLORS["muted"], borderwidth=0, relief="flat",
-                        padding=(8, 9), font=self.font_small)
-        style.map("Ghost.TButton", foreground=[("active", COLORS["accent"])])
-        style.configure("Card.TCheckbutton", background=COLORS["surface"],
-                        foreground=COLORS["text"], font=self.font, padding=(0, 4))
-        style.map("Card.TCheckbutton", background=[("active", COLORS["surface"])])
         style.configure("Accent.Horizontal.TProgressbar", background=COLORS["accent"],
                         troughcolor=COLORS["border"], borderwidth=0)
 
     def card(self, parent, row, *, pady=(0, 0)):
-        card = tk.Frame(parent, bg=COLORS["surface"], highlightthickness=1,
-                        highlightbackground=COLORS["border"], padx=20, pady=14)
-        card.grid(row=row, column=0, sticky="nsew", pady=pady)
-        return card
+        outer = tk.Frame(parent, bg=COLORS["background"])
+        outer.grid(row=row, column=0, sticky="nsew", pady=pady)
+        backdrop = tk.Canvas(outer, bg=COLORS["background"],
+                             highlightthickness=0, bd=0)
+        backdrop.place(x=0, y=0, relwidth=1, relheight=1)
+        content = tk.Frame(outer, bg=COLORS["surface"], padx=8, pady=2)
+        content.pack(fill="both", expand=True, padx=12, pady=12)
+        content.lift()
+
+        def redraw(event):
+            width, height = event.width, event.height
+            backdrop.delete("all")
+            rounded_rect(backdrop, 2, 3, width - 1, height - 1, 14, "#E8EDF5")
+            rounded_rect(backdrop, 1, 1, width - 2, height - 3, 14, COLORS["border"])
+            rounded_rect(backdrop, 2, 2, width - 3, height - 4, 13, COLORS["surface"])
+
+        outer.bind("<Configure>", redraw)
+        return content
 
     def section_header(self, parent, title, subtitle, row):
         group = tk.Frame(parent, bg=COLORS["surface"])
@@ -251,7 +437,7 @@ class PullRequestApp:
     def toggle_token(self):
         self._token_visible = not self._token_visible
         self.token_entry.configure(show="" if self._token_visible else "*")
-        self.show_button.configure(text="Скрыть" if self._token_visible else "Показать")
+        self.show_button.set_label("Скрыть" if self._token_visible else "Показать")
 
     def update_link_count(self, _event=None):
         if self.links.edit_modified():
@@ -269,7 +455,7 @@ class PullRequestApp:
             label = "Одобрить PR"
         else:
             label = "Выбери действие"
-        self.run_button.configure(text=label)
+        self.run_button.set_label(label)
 
     def clear_output(self):
         self.output.configure(state="normal")
@@ -294,9 +480,8 @@ class PullRequestApp:
 
     def set_busy(self, value):
         self.busy = value
-        state = "disabled" if value else "normal"
         for button in (self.test_button, self.load_button, self.preview_button, self.run_button):
-            button.configure(state=state)
+            button.set_enabled(not value)
         self.status.set("Работаю с Bitbucket..." if value else "Готово.")
         if value:
             self.progress.grid()
