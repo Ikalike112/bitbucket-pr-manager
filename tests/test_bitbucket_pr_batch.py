@@ -1,12 +1,15 @@
 import copy
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
 from bitbucket_pr_batch import (
+    BitbucketAPI,
     BitbucketError,
     PullRequestRef,
     collect_refs,
@@ -56,6 +59,19 @@ class PullRequestBatchTests(unittest.TestCase):
         api = FakeAPI()
         self.assertEqual(process_pr(api, self.ref, "user-1"), "approved")
         self.assertEqual([call[1].split("/")[-1] for call in api.calls], ["2", "approve", "2"])
+
+    def test_empty_approval_post_sends_valid_json(self):
+        with patch("bitbucket_pr_batch.urlopen", return_value=io.BytesIO(b"{}")) as send:
+            BitbucketAPI("test-token").call("POST", "/repositories/example/repo/pullrequests/2/approve")
+        request = send.call_args.args[0]
+        self.assertEqual(request.data, b"{}")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+
+    def test_already_approved_does_not_post_again(self):
+        api = FakeAPI()
+        api.pr["participants"] = [{"user": {"uuid": "user-1"}, "approved": True}]
+        self.assertEqual(process_pr(api, self.ref, "user-1"), "already approved")
+        self.assertEqual([call[0] for call in api.calls], ["GET"])
 
     def test_merge_requires_explicit_option(self):
         api = FakeAPI()

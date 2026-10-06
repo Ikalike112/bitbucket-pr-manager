@@ -89,7 +89,7 @@ class BitbucketAPI:
     def call(self, method, path, payload=None):
         data = None
         if method == "POST":
-            data = json.dumps(payload).encode("utf-8") if payload is not None else b""
+            data = json.dumps(payload if payload is not None else {}).encode("utf-8")
         request = Request(
             "https://api.bitbucket.org/2.0" + path,
             data=data,
