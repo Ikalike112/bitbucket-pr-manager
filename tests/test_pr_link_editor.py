@@ -109,6 +109,12 @@ class EditorTests(unittest.TestCase):
         self.editor.replace_content(text)
         self.editor.edit_reset()
 
+    def process_events(self):
+        # Use the app's normal event loop. Aqua can keep producing redraw
+        # events for a withdrawn window, so update() may never return.
+        self.root.after(10, self.root.quit)
+        self.root.mainloop()
+
     def key(self, letter, *, shift=False):
         modifier = 8 if self.editor.windowing_system == "aqua" else 4
         event = SimpleNamespace(keysym=letter, keycode=ord(letter.upper()), state=modifier | int(shift))
@@ -239,19 +245,19 @@ class EditorTests(unittest.TestCase):
         with patch.dict(os.environ, {"BITBUCKET_API_TOKEN": ""}):
             app = PullRequestApp(self.root)
         self.editor = app.links
-        self.root.update()
+        self.process_events()
         self.editor.clipboard_append("https://bitbucket.org/team/repo/pull-requests/1\n" * 2)
         app._preview_all_approved = True
         # Exercise the paste handler without displaying the nested app widget.
         self.editor.paste_clipboard()
-        self.root.update()
+        self.process_events()
         self.assertEqual(app.link_count.get(), "1 PR")
         self.assertFalse(app._preview_all_approved)
         self.editor.replace_content("")
-        self.root.update()
+        self.process_events()
         self.assertEqual(app.link_count.get(), "0 PR")
         self.key("z")
-        self.root.update()
+        self.process_events()
         self.assertEqual(app.link_count.get(), "1 PR")
 
     def test_loading_file_through_app_can_be_undone(self):
@@ -264,7 +270,7 @@ class EditorTests(unittest.TestCase):
             path.write_text("https://bitbucket.org/team/repo/pull-requests/2", encoding="utf-8-sig")
             with patch("bitbucket_pr_ui.filedialog.askopenfilename", return_value=str(path)):
                 app.load_file()
-        self.root.update()
+        self.process_events()
         self.assertEqual(app.link_count.get(), "1 PR")
         self.key("z")
         self.assertEqual(self.text(), "original")
