@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from bitbucket_pr_batch import BitbucketAPI, BitbucketError, collect_refs, process_pr
+from pr_link_editor import PullRequestLinks
 
 
 COLORS = {
@@ -335,7 +336,7 @@ class PullRequestApp:
         text_container.grid(row=1, column=0, sticky="nsew")
         text_container.columnconfigure(0, weight=1)
         text_container.rowconfigure(0, weight=1)
-        self.links = tk.Text(
+        self.links = PullRequestLinks(
             text_container, wrap="none", undo=True, height=6, font=self.font_mono,
             bg=COLORS["field"], fg=COLORS["text"], insertbackground=COLORS["text"],
             selectbackground=COLORS["accent_soft"], relief="flat", bd=0, padx=14, pady=12,
@@ -515,8 +516,7 @@ class PullRequestApp:
         except OSError as error:
             messagebox.showerror("Не удалось прочитать файл", str(error))
             return
-        self.links.delete("1.0", "end")
-        self.links.insert("1.0", content)
+        self.links.replace_content(content)
         self.status.set(f"Загружен файл: {path}")
 
     def show_guide(self):
