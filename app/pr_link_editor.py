@@ -19,9 +19,11 @@ RUSSIAN_KEYS = {
 
 
 def shortcut_action(keysym, keycode, state, windowing_system):
-    # AltGr must keep its native Ctrl+Alt behavior. Windows uses a separate
-    # Alt flag as well as the Mod1 flag used by other Tk platforms.
-    if state & (0x0008 | 0x20000):
+    # Tk uses Mod1 for Command on macOS, but for Alt on Windows/Linux.
+    # Option is Mod2 on macOS; Mod2 is often Num Lock on Linux.
+    modifier_mask = 0x0008 if windowing_system == "aqua" else 0x0004
+    alt_mask = 0x0010 if windowing_system == "aqua" else (0x0008 | 0x20000)
+    if not state & modifier_mask or state & alt_mask:
         return None
     if windowing_system == "win32" and keycode in (65, 67, 86, 88, 90, 89):
         key = chr(keycode).lower()
@@ -42,6 +44,7 @@ class PullRequestLinks(tk.Text):
         modifier = "Command" if self.windowing_system == "aqua" else "Control"
         self.bind(f"<{modifier}-KeyPress>", self.on_shortcut)
         self.bind("<<SelectAll>>", self.select_all)
+        self.bind("<<Paste>>", self.paste_clipboard)
         self.bind("<Button-3>", self.show_context_menu)
         self.bind("<Shift-F10>", self.show_context_menu)
         self.bind("<KeyPress-Menu>", self.show_context_menu)
@@ -86,6 +89,30 @@ class PullRequestLinks(tk.Text):
     def select_all(self, _event=None):
         self.tag_add("sel", "1.0", "end-1c")
         self.mark_set("insert", "end-1c")
+        self.see("insert")
+        return "break"
+
+    def paste_clipboard(self, _event=None):
+        # Native X11 Text paste inserts beside the selection. Use the same
+        # replacement behavior on all platforms, including Shift+Insert.
+        if self.cget("state") != "normal":
+            return "break"
+        try:
+            content = self.clipboard_get()
+        except tk.TclError:
+            return "break"
+        if not content:
+            return "break"
+        selection = self.tag_ranges("sel")
+        start, end = (selection[0], selection[-1]) if selection else ("insert", "insert")
+        separate = self.tk.getboolean(self.cget("autoseparators"))
+        if separate:
+            self.edit_separator()
+        self.mark_set("insert", start)
+        self.replace(start, end, content)
+        if separate:
+            self.edit_separator()
+        self.tag_remove("sel", "1.0", "end")
         self.see("insert")
         return "break"
 
