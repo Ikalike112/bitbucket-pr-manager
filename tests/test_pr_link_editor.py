@@ -12,6 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from bitbucket_pr_ui import PullRequestApp
 from pr_link_editor import PullRequestLinks, shortcut_action
 
+if os.environ.get("PR_MANAGER_REQUIRE_TK") == "1":
+    import faulthandler
+
+    # Fail with a Python stack trace if a native GUI call blocks the runner.
+    faulthandler.dump_traceback_later(60, exit=True)
+
 
 class ShortcutTests(unittest.TestCase):
     def test_windows_shortcuts_use_physical_keys_in_both_layouts(self):
