@@ -262,7 +262,6 @@ class PullRequestApp:
         self.configure_styles()
 
         self.token = tk.StringVar(value=os.environ.get("BITBUCKET_API_TOKEN", ""))
-        self.target = tk.StringVar(value="develop")
         self.approve = tk.BooleanVar(value=True)
         self.merge = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Готово к работе")
@@ -353,12 +352,6 @@ class PullRequestApp:
                  fg=COLORS["text"], font=self.font_section).grid(row=0, column=0, sticky="w")
         options = tk.Frame(actions, bg=COLORS["surface"])
         options.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        tk.Label(options, text="Целевая ветка", bg=COLORS["surface"],
-                 fg=COLORS["muted"], font=self.font_small).pack(side="left", padx=(0, 10))
-        tk.Entry(options, textvariable=self.target, width=15, font=self.font,
-                 bg=COLORS["field"], fg=COLORS["text"], relief="flat",
-                 highlightthickness=1, highlightbackground=COLORS["border"],
-                 highlightcolor=COLORS["accent"], bd=0).pack(side="left", ipady=7, padx=(0, 18))
         TickBox(options, "Approve", self.approve, self.font).pack(side="left", padx=(0, 14))
         TickBox(options, "Merge", self.merge, self.font).pack(side="left")
         self.run_button = RoundedButton(options, "Approve", self.run,
@@ -370,7 +363,6 @@ class PullRequestApp:
         self.approve.trace_add("write", self.invalidate_preview)
         self.merge.trace_add("write", self.invalidate_preview)
         self.token.trace_add("write", self.invalidate_preview)
-        self.target.trace_add("write", self.invalidate_preview)
 
         results = self.card(shell, 4)
         results.columnconfigure(0, weight=1)
@@ -572,20 +564,19 @@ class PullRequestApp:
             messagebox.showerror("Нет ссылок", "Вставьте хотя бы одну ссылку на PR.")
             return
 
-        target = self.target.get().strip() or None
         preview_context = (
-            token, target, approve, merge, self.links.get("1.0", "end"),
+            token, approve, merge, self.links.get("1.0", "end"),
         )
         action = "Проверка" if dry_run else "Выполнение"
-        self.log(f"{action}: {len(refs)} PR; approve={approve}, merge={merge}, target={target or 'any'}")
+        self.log(f"{action}: {len(refs)} PR; approve={approve}, merge={merge}")
         self.set_busy(True)
         threading.Thread(
             target=self.batch_worker,
-            args=(token, refs, approve, merge, dry_run, target, preview_context),
+            args=(token, refs, approve, merge, dry_run, preview_context),
             daemon=True,
         ).start()
 
-    def batch_worker(self, token, refs, approve, merge, dry_run, target, preview_context):
+    def batch_worker(self, token, refs, approve, merge, dry_run, preview_context):
         api = BitbucketAPI(token)
         try:
             me = api.call("GET", "/user")
@@ -596,7 +587,7 @@ class PullRequestApp:
                 try:
                     result = process_pr(
                         api, ref, user_uuid,
-                        approve=approve, merge=merge, dry_run=dry_run, target=target,
+                        approve=approve, merge=merge, dry_run=dry_run,
                         include_approval_state=dry_run and approve and merge,
                     )
                     if dry_run and approve and merge:
@@ -627,7 +618,7 @@ class PullRequestApp:
                 elif kind == "approval_preview":
                     context, all_approved = value
                     current = (
-                        self.token.get().strip(), self.target.get().strip() or None,
+                        self.token.get().strip(),
                         self.approve.get(), self.merge.get(), self.links.get("1.0", "end"),
                     )
                     if context == current:

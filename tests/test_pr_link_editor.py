@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
 from bitbucket_pr_ui import PullRequestApp
+from bitbucket_pr_batch import PullRequestRef
 from pr_link_editor import PullRequestLinks, shortcut_action
 
 if os.environ.get("PR_MANAGER_REQUIRE_TK") == "1":
@@ -274,6 +275,51 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(app.link_count.get(), "1 PR")
         self.key("z")
         self.assertEqual(self.text(), "original")
+
+    def test_app_preview_uses_each_pr_destination_and_updates_merge_label(self):
+        with patch.dict(os.environ, {"BITBUCKET_API_TOKEN": ""}):
+            app = PullRequestApp(self.root)
+        self.editor = app.links
+        refs = (
+            PullRequestRef("animaplay", "ree.api.admin", 6),
+            PullRequestRef("animaplay", "ree.service.usermanagement", 5),
+        )
+        destinations = (
+            "feature/prebrain-guardrails-20261008",
+            "feature/admin-brd-hierarchy-20261012",
+        )
+        prs = {
+            ref.api_path: {
+                "state": "OPEN",
+                "destination": {"branch": {"name": destination}},
+                "source": {"commit": {"hash": "abc123"}},
+                "participants": [{"user": {"uuid": "user-1"}, "approved": True}],
+            }
+            for ref, destination in zip(refs, destinations)
+        }
+        app.token.set("test-token")
+        app.merge.set(True)
+        self.editor.replace_content("\n".join(ref.url for ref in refs))
+        self.process_events()
+        with patch("bitbucket_pr_ui.threading.Thread") as worker_thread:
+            app.start_batch(dry_run=True)
+        worker_thread.return_value.start.assert_called_once_with()
+        with patch("bitbucket_pr_ui.BitbucketAPI") as api_class:
+            api_class.return_value.call.side_effect = lambda method, path: (
+                {"uuid": "user-1"} if path == "/user" else prs[path]
+            )
+            app.batch_worker(*worker_thread.call_args.kwargs["args"])
+        self.root.after_cancel(app._after_id)
+        app.drain_events()
+        output = app.output.get("1.0", "end")
+        for destination in destinations:
+            self.assertIn("into " + destination, output)
+        self.assertNotIn("FAIL", output)
+        self.assertTrue(app._preview_all_approved)
+        self.assertEqual(app.run_button.label, "Merge")
+        self.assertTrue(all(
+            call.args[0] == "GET" for call in api_class.return_value.call.call_args_list
+        ))
 
 
 if __name__ == "__main__":

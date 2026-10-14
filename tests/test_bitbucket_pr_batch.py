@@ -13,21 +13,23 @@ from bitbucket_pr_batch import (
     BitbucketError,
     PullRequestRef,
     collect_refs,
+    main,
     parse_pr_url,
     process_pr,
 )
 
 
 class FakeAPI:
-    def __init__(self, *, source_change=False):
+    def __init__(self, *, source_change=False, destination="develop", destination_change=False):
         self.pr = {
             "state": "OPEN",
-            "destination": {"branch": {"name": "develop"}},
+            "destination": {"branch": {"name": destination}},
             "source": {"commit": {"hash": "abc123"}},
             "participants": [],
         }
         self.calls = []
         self.source_change = source_change
+        self.destination_change = destination_change
 
     def call(self, method, path, payload=None):
         self.calls.append((method, path, payload))
@@ -35,6 +37,8 @@ class FakeAPI:
             self.pr["participants"] = [{"user": {"uuid": "user-1"}, "approved": True}]
             if self.source_change:
                 self.pr["source"]["commit"]["hash"] = "changed"
+            if self.destination_change:
+                self.pr["destination"]["branch"]["name"] = "changed-target"
         elif path.endswith("/merge"):
             self.pr["state"] = "MERGED"
         return copy.deepcopy(self.pr)
@@ -108,11 +112,53 @@ class PullRequestBatchTests(unittest.TestCase):
             ("already merged", False),
         )
 
-    def test_target_mismatch_prevents_mutation(self):
-        api = FakeAPI()
-        with self.assertRaises(BitbucketError):
-            process_pr(api, self.ref, "user-1", merge=True, target="master")
-        self.assertEqual(len(api.calls), 1)
+    def test_approve_and_merge_use_destination_from_each_pr(self):
+        for destination in (
+            "develop",
+            "feature/prebrain-guardrails-20261008",
+            "feature/admin-brd-hierarchy-20261012",
+        ):
+            with self.subTest(destination=destination):
+                api = FakeAPI(destination=destination)
+                self.assertEqual(process_pr(api, self.ref, "user-1", merge=True), "merged")
+                self.assertEqual(api.pr["destination"]["branch"]["name"], destination)
+                self.assertEqual(
+                    [call[1].split("/")[-1] for call in api.calls if call[0] == "POST"],
+                    ["approve", "merge"],
+                )
+
+    def test_cli_preview_accepts_mixed_destinations_without_posting(self):
+        destinations = {
+            PullRequestRef("animaplay", "ree.api.admin", 6):
+                "feature/prebrain-guardrails-20261008",
+            PullRequestRef("animaplay", "ree.service.usermanagement", 5):
+                "feature/admin-brd-hierarchy-20261012",
+        }
+        prs = {
+            ref.api_path: FakeAPI(destination=destination).pr
+            for ref, destination in destinations.items()
+        }
+        output = io.StringIO()
+        with patch.dict("os.environ", {"BITBUCKET_API_TOKEN": "test-token"}), \
+                patch("bitbucket_pr_batch.BitbucketAPI") as api_class, \
+                patch("sys.stdout", output):
+            api_class.return_value.call.side_effect = lambda method, path: (
+                {"uuid": "user-1"} if path == "/user" else copy.deepcopy(prs[path])
+            )
+            result = main(["--dry-run", "--merge", *(ref.url for ref in destinations)])
+        self.assertEqual(result, 0)
+        for destination in destinations.values():
+            self.assertIn("into " + destination, output.getvalue())
+        self.assertIn("Processed 2 PR(s); failed: 0", output.getvalue())
+        self.assertTrue(all(
+            call.args[0] == "GET" for call in api_class.return_value.call.call_args_list
+        ))
+
+    def test_destination_change_prevents_merge(self):
+        api = FakeAPI(destination_change=True)
+        with self.assertRaisesRegex(BitbucketError, "destination branch changed"):
+            process_pr(api, self.ref, "user-1", merge=True)
+        self.assertFalse(any(call[1].endswith("/merge") for call in api.calls))
 
     def test_source_change_prevents_merge(self):
         api = FakeAPI(source_change=True)

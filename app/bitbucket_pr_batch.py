@@ -4,10 +4,11 @@
 Examples:
   python app/bitbucket_pr_batch.py https://bitbucket.org/example-team/service-api/pull-requests/12
   python app/bitbucket_pr_batch.py --file pr-links.txt --dry-run --merge
-  python app/bitbucket_pr_batch.py --file pr-links.txt --target develop --merge
+  python app/bitbucket_pr_batch.py --file pr-links.txt --merge
 
 Requires BITBUCKET_API_TOKEN in the environment. Process links in input order;
-put dependent PRs in separate runs. No third-party Python packages are needed.
+put dependent PRs in separate runs. Each PR uses its destination from Bitbucket.
+No third-party Python packages are needed.
 """
 
 import argparse
@@ -123,15 +124,13 @@ def approved_by(pr, user_uuid):
 
 
 def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False,
-               target=None, include_approval_state=False):
+               include_approval_state=False):
     if not approve and not merge:
         raise BitbucketError("select approve, merge, or both")
     pr = api.call("GET", ref.api_path)
     state = pr.get("state")
     destination = pr.get("destination", {}).get("branch", {}).get("name")
     source_hash = pr.get("source", {}).get("commit", {}).get("hash")
-    if target and destination != target:
-        raise BitbucketError(f"target is {destination!r}, expected {target!r}")
     if state == "MERGED":
         result = "already merged"
         return (result, False) if dry_run and include_approval_state else result
@@ -177,12 +176,15 @@ def process_pr(api, ref, user_uuid, *, approve=True, merge=False, dry_run=False,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Approve selected Bitbucket Cloud PRs; merge only with --merge.",
+        description=(
+            "Approve selected Bitbucket Cloud PRs; merge only with --merge "
+            "into each PR's destination branch."
+        ),
         epilog=(
             "Examples:\n"
             "  python app/bitbucket_pr_batch.py https://bitbucket.org/example-team/service-api/pull-requests/12\n"
             "  python app/bitbucket_pr_batch.py --file pr-links.txt --dry-run --merge\n"
-            "  python app/bitbucket_pr_batch.py --file pr-links.txt --target develop --merge"
+            "  python app/bitbucket_pr_batch.py --file pr-links.txt --merge"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -190,7 +192,6 @@ def main(argv=None):
     parser.add_argument("--file", help="UTF-8 text file with one PR link per line; '-' reads stdin")
     parser.add_argument("--merge", action="store_true", help="merge each PR after approving it")
     parser.add_argument("--dry-run", action="store_true", help="show actions without changing PRs")
-    parser.add_argument("--target", help="require this destination branch, e.g. develop")
     args = parser.parse_args(argv)
 
     try:
@@ -216,7 +217,7 @@ def main(argv=None):
         try:
             outcome = process_pr(
                 api, ref, user_uuid,
-                merge=args.merge, dry_run=args.dry_run, target=args.target,
+                merge=args.merge, dry_run=args.dry_run,
             )
             print(f"OK   {ref.url} -> {outcome}")
         except BitbucketError as error:
