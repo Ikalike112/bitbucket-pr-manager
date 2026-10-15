@@ -10,6 +10,9 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from bitbucket_pr_batch import BitbucketAPI, BitbucketError, collect_refs, process_pr
 from pr_link_editor import PullRequestLinks
+from credential_entry import CredentialEntry
+import token_store as system_token_store
+from token_store import TokenStoreError
 
 
 COLORS = {
@@ -239,7 +242,7 @@ class PillScrollbar(tk.Canvas):
 
 
 class PullRequestApp:
-    def __init__(self, root):
+    def __init__(self, root, *, token_store=None):
         self.root = root
         self.root.title("Bitbucket PR Manager")
         self.root.configure(bg=COLORS["background"])
@@ -250,6 +253,12 @@ class PullRequestApp:
         self._has_output = False
         self._token_visible = False
         self._preview_all_approved = False
+        self.token_store = token_store if token_store is not None else system_token_store
+        self._credential_requests = queue.Queue()
+        self._token_revision = 0
+        self._closing = False
+        self._can_force_close = False
+        self._close_wait_id = None
         self.font_name = system_font(root)
         self.font = (self.font_name, 11)
         self.font_small = (self.font_name, 10)
@@ -261,11 +270,12 @@ class PullRequestApp:
         self.font_mono = (mono, 10)
         self.configure_styles()
 
-        self.token = tk.StringVar(value=os.environ.get("BITBUCKET_API_TOKEN", ""))
+        self.token = tk.StringVar(value=os.environ.get("BITBUCKET_API_TOKEN", "").strip())
         self.approve = tk.BooleanVar(value=True)
         self.merge = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Готово к работе")
         self.link_count = tk.StringVar(value="0 PR")
+        self.credential_status = tk.StringVar(value="Загружаю сохранённый токен...")
 
         shell = tk.Frame(root, bg=COLORS["background"])
         shell.pack(fill="both", expand=True, padx=24, pady=16)
@@ -291,11 +301,11 @@ class PullRequestApp:
 
         account = self.card(shell, 1, pady=(0, 10))
         account.columnconfigure(0, weight=1)
-        self.section_header(account, "Подключение", "Токен остаётся только в памяти приложения", 0)
+        self.section_header(account, "Подключение", "Токен сохраняется в системном хранилище учётных данных", 0)
         credential_row = tk.Frame(account, bg=COLORS["surface"])
         credential_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         credential_row.columnconfigure(0, weight=1)
-        self.token_entry = tk.Entry(
+        self.token_entry = CredentialEntry(
             credential_row, textvariable=self.token, show="*", font=self.font,
             bg=COLORS["field"], fg=COLORS["text"], insertbackground=COLORS["text"],
             relief="flat", highlightthickness=1, highlightbackground=COLORS["border"],
@@ -310,9 +320,15 @@ class PullRequestApp:
         self.test_button.grid(row=0, column=2, padx=(8, 0))
         RoundedButton(credential_row, "Настройка", self.show_guide,
                       self.font_small, kind="ghost").grid(row=0, column=3, padx=(8, 0))
-        tk.Label(account, text="Вставь API token или используй BITBUCKET_API_TOKEN. Репозитории определяются по ссылкам.",
+        credential_footer = tk.Frame(account, bg=COLORS["surface"])
+        credential_footer.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        credential_footer.columnconfigure(0, weight=1)
+        tk.Label(credential_footer, textvariable=self.credential_status,
                  bg=COLORS["surface"], fg=COLORS["muted"],
-                 font=self.font_small).grid(row=2, column=0, sticky="w", pady=(8, 0))
+                 font=self.font_small, wraplength=580, justify="left").grid(row=0, column=0, sticky="w")
+        self.forget_button = RoundedButton(credential_footer, "Забыть токен", self.forget_token,
+                                           self.font_small, kind="ghost")
+        self.forget_button.grid(row=0, column=1, padx=(8, 0))
 
         links_card = self.card(shell, 2, pady=(0, 10))
         links_card.columnconfigure(0, weight=1)
@@ -362,7 +378,7 @@ class PullRequestApp:
         self.preview_button.pack(side="right", padx=(0, 10))
         self.approve.trace_add("write", self.invalidate_preview)
         self.merge.trace_add("write", self.invalidate_preview)
-        self.token.trace_add("write", self.invalidate_preview)
+        self.token.trace_add("write", self.on_token_changed)
 
         results = self.card(shell, 4)
         results.columnconfigure(0, weight=1)
@@ -405,6 +421,9 @@ class PullRequestApp:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._after_id = self.root.after(100, self.drain_events)
         self.root.bind("<Destroy>", self.on_destroy, add="+")
+        self._credential_thread = threading.Thread(target=self.credential_worker, daemon=True)
+        self._credential_thread.start()
+        self._credential_requests.put(("load", None, self._token_revision, False))
 
     def configure_styles(self):
         style = ttk.Style(self.root)
@@ -444,6 +463,81 @@ class PullRequestApp:
         self._token_visible = not self._token_visible
         self.token_entry.configure(show="" if self._token_visible else "*")
         self.show_button.set_label("Скрыть" if self._token_visible else "Показать")
+
+    def on_token_changed(self, *_):
+        self._token_revision += 1
+        self.invalidate_preview()
+        self.credential_status.set("Токен будет сохранён при проверке доступа или закрытии.")
+
+    def save_token(self, *, close_when_done=False):
+        token = self.token.get().strip()
+        # Clearing the input must not erase an existing credential by accident.
+        # Deletion is an explicit action through "Forget token".
+        action = "save" if token else "close"
+        if action == "save" or close_when_done:
+            self._credential_requests.put((action, token, self._token_revision, close_when_done))
+
+    def forget_token(self):
+        if self.busy or self._closing:
+            return
+        self.token.set("")
+        self._credential_requests.put(("delete", None, self._token_revision, False))
+        self.credential_status.set("Удаляю сохранённый токен...")
+
+    def credential_worker(self):
+        # A single queue keeps load/save/delete ordered. Never access Tk from
+        # this thread: Keychain permission prompts can take a while to resolve.
+        stored_token = None
+        while True:
+            request = self._credential_requests.get()
+            try:
+                if request is None:
+                    return
+                action, token, revision, close_when_done = request
+                error = None
+                try:
+                    if action == "load":
+                        token = self.token_store.load_token()
+                        stored_token = token
+                    elif action == "save":
+                        if token != stored_token:
+                            self.token_store.save_token(token)
+                            stored_token = token
+                    elif action == "delete":
+                        self.token_store.delete_token()
+                        stored_token = ""
+                except TokenStoreError as failure:
+                    error = str(failure)
+                self.events.put(("credential", (action, token, revision, close_when_done, error)))
+            finally:
+                self._credential_requests.task_done()
+
+    def credential_result(self, result):
+        action, token, revision, close_when_done, error = result
+        if error:
+            self.credential_status.set(error)
+        elif action == "load":
+            # A late Keychain response must not replace an edit or an env token.
+            if revision == self._token_revision and not self.token.get() and not self._closing:
+                self.token.set(token or "")
+                self.credential_status.set(
+                    "Сохранённый токен загружен." if token else
+                    "Вставь API token. Он будет сохранён при проверке доступа или закрытии.")
+            elif self.token.get().strip() == token:
+                self.credential_status.set("Сохранённый токен загружен.")
+            elif revision == self._token_revision:
+                self.credential_status.set("Токен из BITBUCKET_API_TOKEN. Сохранится при проверке или закрытии.")
+        elif action == "save":
+            if self.token.get().strip() == token:
+                self.credential_status.set("Токен сохранён в системном хранилище.")
+        elif action == "delete":
+            self.credential_status.set("Сохранённый токен удалён.")
+        if close_when_done:
+            if error:
+                messagebox.showwarning("Токен не сохранён", error, parent=self.root)
+            self.root.destroy()
+            return True
+        return False
 
     def update_link_count(self, _event=None):
         if self.links.edit_modified():
@@ -485,7 +579,8 @@ class PullRequestApp:
 
     def set_busy(self, value):
         self.busy = value
-        for button in (self.test_button, self.load_button, self.preview_button, self.run_button):
+        for button in (self.test_button, self.load_button, self.preview_button, self.run_button,
+                       self.forget_button):
             button.set_enabled(not value)
         self.status.set("Работаю с Bitbucket..." if value else "Готово.")
         if value:
@@ -518,7 +613,11 @@ class PullRequestApp:
             "и правами читать PR, одобрять и сливать их.\n\n"
             "Вставь токен в скрытое поле или задай BITBUCKET_API_TOKEN до запуска. "
             "Нажми «Проверить», чтобы увидеть, под каким аккаунтом работает приложение.\n\n"
-            "Токен не сохраняется на диск. Подробнее — README.md в каталоге проекта.",
+            "Токен автоматически сохраняется при проверке доступа, запуске действий или закрытии. "
+            "При следующем запуске он подставится из macOS Keychain, Windows Credential Manager "
+            "или Linux Secret Service. Кнопка «Забыть токен» удаляет сохранённую запись.\n\n"
+            "Если хранилище недоступно, токен можно вводить вручную. "
+            "Подробнее — README.md в каталоге проекта.",
         )
 
     def check_connection(self):
@@ -526,6 +625,7 @@ class PullRequestApp:
         if not token:
             messagebox.showerror("Нужен токен", "Вставьте Bitbucket API token.")
             return
+        self.save_token()
         self.set_busy(True)
         threading.Thread(target=self.connection_worker, args=(token,), daemon=True).start()
 
@@ -563,6 +663,8 @@ class PullRequestApp:
         if not refs:
             messagebox.showerror("Нет ссылок", "Вставьте хотя бы одну ссылку на PR.")
             return
+
+        self.save_token()
 
         preview_context = (
             token, approve, merge, self.links.get("1.0", "end"),
@@ -615,6 +717,9 @@ class PullRequestApp:
                 kind, value = self.events.get_nowait()
                 if kind == "log":
                     self.log(value)
+                elif kind == "credential":
+                    if self.credential_result(value):
+                        return
                 elif kind == "approval_preview":
                     context, all_approved = value
                     current = (
@@ -633,15 +738,42 @@ class PullRequestApp:
         self._after_id = self.root.after(100, self.drain_events)
 
     def on_destroy(self, event):
-        if event.widget is self.root and self._after_id is not None:
-            self.root.after_cancel(self._after_id)
-            self._after_id = None
+        if event.widget is self.root:
+            if self._after_id is not None:
+                self.root.after_cancel(self._after_id)
+                self._after_id = None
+            if self._close_wait_id is not None:
+                self.root.after_cancel(self._close_wait_id)
+                self._close_wait_id = None
+            self._credential_requests.put(None)
+
+    def allow_close_without_waiting(self):
+        if self._close_wait_id is not None:
+            self.root.after_cancel(self._close_wait_id)
+            self._close_wait_id = None
+        self._can_force_close = True
+        self.status.set("Хранилище не ответило. Нажми × ещё раз, чтобы закрыть без ожидания.")
 
     def close(self):
+        if self._closing:
+            if self._can_force_close and messagebox.askyesno(
+                "Закрыть без ожидания?",
+                "Системное хранилище ещё не ответило. Последние изменения токена могут не сохраниться. "
+                "Закрыть приложение?", parent=self.root,
+            ):
+                self.root.destroy()
+            return
         if self.busy:
             messagebox.showinfo("Операция выполняется", "Дождитесь завершения текущей операции.")
             return
-        self.root.destroy()
+        self._closing = True
+        self.token_entry.configure(state="disabled")
+        for button in (self.test_button, self.load_button, self.preview_button, self.run_button,
+                       self.forget_button):
+            button.set_enabled(False)
+        self.status.set("Сохраняю токен...")
+        self._close_wait_id = self.root.after(3000, self.allow_close_without_waiting)
+        self.save_token(close_when_done=True)
 
 
 def main():

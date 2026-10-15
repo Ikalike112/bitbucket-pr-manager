@@ -13,6 +13,11 @@ from bitbucket_pr_ui import PullRequestApp
 from bitbucket_pr_batch import PullRequestRef
 from pr_link_editor import PullRequestLinks, shortcut_action
 
+
+def memory_token_store():
+    return SimpleNamespace(load_token=lambda: "", save_token=lambda _token: None,
+                           delete_token=lambda: None)
+
 if os.environ.get("PR_MANAGER_REQUIRE_TK") == "1":
     import faulthandler
 
@@ -244,7 +249,7 @@ class EditorTests(unittest.TestCase):
 
     def test_paste_clear_and_undo_update_count_and_invalidate_preview(self):
         with patch.dict(os.environ, {"BITBUCKET_API_TOKEN": ""}):
-            app = PullRequestApp(self.root)
+            app = PullRequestApp(self.root, token_store=memory_token_store())
         self.editor = app.links
         self.process_events()
         self.editor.clipboard_append("https://bitbucket.org/team/repo/pull-requests/1\n" * 2)
@@ -263,7 +268,7 @@ class EditorTests(unittest.TestCase):
 
     def test_loading_file_through_app_can_be_undone(self):
         with patch.dict(os.environ, {"BITBUCKET_API_TOKEN": ""}):
-            app = PullRequestApp(self.root)
+            app = PullRequestApp(self.root, token_store=memory_token_store())
         self.editor = app.links
         self.contents("original")
         with tempfile.TemporaryDirectory() as directory:
@@ -278,7 +283,7 @@ class EditorTests(unittest.TestCase):
 
     def test_app_preview_uses_each_pr_destination_and_updates_merge_label(self):
         with patch.dict(os.environ, {"BITBUCKET_API_TOKEN": ""}):
-            app = PullRequestApp(self.root)
+            app = PullRequestApp(self.root, token_store=memory_token_store())
         self.editor = app.links
         refs = (
             PullRequestRef("animaplay", "ree.api.admin", 6),
